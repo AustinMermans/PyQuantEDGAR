@@ -1,4 +1,4 @@
-"""
+
 # --- AI ASSISTANT GUIDELINES (PyQuantEDGAR - Stage 1) ---
 
 You are an expert Python data engineer. Your role is to help me build the "PyQuantEDGAR - Stage 1" project. Your primary goal is to adhere strictly to the project specification we have defined.
@@ -47,7 +47,6 @@ We are building this project using 4 distinct modules. You must write code that 
 * **No Placeholders:** Do not use `pass`, `# TODO`, or `...` as a crutch. Write the complete, functional code for the task.
 * **Imports:** Imports should be standard and placed at the top of the file, grouped (stdlib, third-party, local).
 
-"""
 
 # This file is intentionally blank.
 # Its purpose is to hold the module-level docstring above,
