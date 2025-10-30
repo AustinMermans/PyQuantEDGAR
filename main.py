@@ -52,6 +52,20 @@ if __name__ == "__main__":
     raw_tickers = args.tickers.split(",")
     tickers = [ticker.strip().lower() for ticker in raw_tickers if ticker.strip()]
 
+    def filing_year(filing):
+        """
+        Determine the best available year for filtering, preferring reportDate.
+        """
+        for date_str in (filing.reportDate, filing.filingDate):
+            if date_str and len(date_str) >= 4:
+                try:
+                    return int(date_str[:4])
+                except ValueError:
+                    continue
+        return None
+
+    start_year = args.start_year
+
     for ticker in tickers:
         print(f"Looking up CIK for '{ticker}'...")
         cik = cik_map.get(ticker)
@@ -70,6 +84,24 @@ if __name__ == "__main__":
         if not filings:
             print(f"[{ticker.upper()}] No XBRL filings found. Skipping.")
             continue
+
+        if start_year:
+            pre_filter_count = len(filings)
+            filtered = []
+            for filing in filings:
+                year = filing_year(filing)
+                if year is None or year >= start_year:
+                    filtered.append(filing)
+            filings = filtered
+            print(
+                f"[{ticker.upper()}] Filtered filings from {pre_filter_count} to {len(filings)} "
+                f"using start_year={start_year}."
+            )
+            if not filings:
+                print(
+                    f"[{ticker.upper()}] No filings on or after {start_year}. Skipping."
+                )
+                continue
 
         print(f"[{ticker.upper()}] Found {len(filings)} XBRL filings. Processing...")
 

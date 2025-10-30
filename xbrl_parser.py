@@ -4,13 +4,34 @@ import requests
 from lxml import etree # This is the standard import for lxml's parsing tools
 from edgar_downloader import Filing
 
-# A set of the US-GAAP tags we aim to extract
-TARGET_METRICS = {
-    "Revenues",
-    "SalesRevenueNet",
-    "NetIncomeLoss",
-    "Assets",
-    "Liabilities"
+# Maps our internal, standard metric name to a list of possible
+# US-GAAP XBRL tag variations from different taxonomy years.
+METRIC_ALIASES = {
+    "Revenues": [
+        "Revenues",
+        "SalesRevenueNet",
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+    ],
+    "NetIncomeLoss": [
+        "NetIncomeLoss",
+        "ProfitLoss",
+    ],
+    "Assets": ["Assets"],
+    "Liabilities": ["Liabilities"],
+    "GrossProfit": ["GrossProfit"],
+    "OperatingIncomeLoss": ["OperatingIncomeLoss"],
+    "EarningsPerShareBasic": ["EarningsPerShareBasic"],
+    "EarningsPerShareDiluted": ["EarningsPerShareDiluted"],
+    "AssetsCurrent": ["AssetsCurrent"],
+    "LiabilitiesCurrent": ["LiabilitiesCurrent"],
+    "StockholdersEquity": [
+        "StockholdersEquity",
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    ],
+    "CashAndCashEquivalentsAtCarryingValue": ["CashAndCashEquivalentsAtCarryingValue"],
+    "NetCashProvidedByUsedInOperatingActivities": ["NetCashProvidedByUsedInOperatingActivities"],
+    "NetCashProvidedByUsedInInvestingActivities": ["NetCashProvidedByUsedInInvestingActivities"],
+    "NetCashProvidedByUsedInFinancingActivities": ["NetCashProvidedByUsedInFinancingActivities"],
 }
 
 # Re-define our HEADERS constant for this file's requests
@@ -56,13 +77,37 @@ def get_parsable_document_url(filing: Filing) -> str:
     candidate_names = [
         f"{doc_name_base}.xml",       # Traditional XBRL instance files
         f"{doc_name_base}_htm.xml",   # Common inline companion export
-        filing.primaryDocument,       # Inline XBRL HTML document
     ]
+
+    if filing.isInlineXBRL:
+        candidate_names.append(filing.primaryDocument)  # Inline XBRL HTML document
 
     for doc_name in candidate_names:
         candidate_url = f"{base_path}/{doc_name}"
         if _url_exists(candidate_url):
             return candidate_url
+
+    # As a fallback, inspect the directory index for a standalone instance document.
+    try:
+        index_url = f"{base_path}/index.json"
+        index_response = requests.get(index_url, headers=HEADERS, timeout=10)
+        index_response.raise_for_status()
+        index_data = index_response.json()
+        items = index_data.get("directory", {}).get("item", [])
+        for item in items:
+            name = item.get("name", "")
+            lower_name = name.lower()
+            if not lower_name.endswith(".xml"):
+                continue
+            if lower_name in {"filingsummary.xml", "submission.xml"}:
+                continue
+            if lower_name.endswith(("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml")):
+                continue
+            candidate_url = f"{base_path}/{name}"
+            if _url_exists(candidate_url):
+                return candidate_url
+    except requests.RequestException:
+        pass
 
     raise FileNotFoundError(
         f"Could not locate a parsable document for filing {filing.accessionNumber}."
@@ -111,32 +156,42 @@ def _coerce_numeric(value_text: str):
 def parse_filing(filing: Filing):
     """
     Downloads the filing document and parses it into an lxml tree.
-    Returns a list of fact dictionaries extracted from TARGET_METRICS.
+    Returns a list of fact dictionaries extracted from METRIC_ALIASES.
     """
     url = get_parsable_document_url(filing)
     response = requests.get(url, headers=HEADERS)
     response.raise_for_status()
     content = response.content
 
-    is_inline_source = url.lower().endswith(".htm")
+    is_inline_source = url.lower().endswith((".htm", ".html"))
 
     if is_inline_source:
         # Inline XBRL is embedded in HTML; etree.HTML cleans up minor markup issues.
         tree = etree.HTML(content)
-        metric_xpath_template = (
-            "//*[(@name = '{metric}' or substring-after(@name, ':') = '{metric}') and @contextRef]"
-        )
+
+        def build_metric_xpath(tag_aliases):
+            alias_conditions = [
+                f"@name = '{alias}' or substring-after(@name, ':') = '{alias}'"
+                for alias in tag_aliases
+            ]
+            alias_clause = " or ".join(alias_conditions)
+            return f"//*[( {alias_clause} ) and @contextRef]"
     else:
         # Standard XBRL documents are pure XML.
         parser = etree.XMLParser(ns_clean=True, recover=True)
         tree = etree.fromstring(content, parser)
-        metric_xpath_template = "//*[local-name() = '{metric}' and @contextRef]"
+
+        def build_metric_xpath(tag_aliases):
+            alias_conditions = [f"local-name() = '{alias}'" for alias in tag_aliases]
+            alias_clause = " or ".join(alias_conditions)
+            return f"//*[( {alias_clause} ) and @contextRef]"
 
     contexts = _parse_contexts(tree)
     extracted_facts = []
 
-    for metric in TARGET_METRICS:
-        elements = tree.xpath(metric_xpath_template.format(metric=metric))
+    for standard_metric, tag_aliases in METRIC_ALIASES.items():
+        metric_xpath = build_metric_xpath(tag_aliases)
+        elements = tree.xpath(metric_xpath)
         if not elements:
             continue
 
@@ -163,7 +218,7 @@ def parse_filing(filing: Filing):
 
             numeric_value = _coerce_numeric(value_text)
             if numeric_value is None:
-                print(f"[parse_filing] Skipping {metric}: non-numeric value '{value_text}'")
+                print(f"[parse_filing] Skipping {standard_metric}: non-numeric value '{value_text}'")
                 continue
 
             decimals = element.get("decimals", "INF")
@@ -181,11 +236,11 @@ def parse_filing(filing: Filing):
                             # Converted XML values are already fully scaled.
                             scaled_value = float(numeric_value)
                     except ValueError:
-                        print(f"[parse_filing] Warning: Unknown decimals '{decimals}' for {metric}. Using raw value.")
+                        print(f"[parse_filing] Warning: Unknown decimals '{decimals}' for {standard_metric}. Using raw value.")
 
             extracted_facts.append(
                 {
-                    "metric": metric,
+                    "metric": standard_metric,
                     "value": scaled_value,
                     "decimals": decimals,
                     "period_type": period_info.get("period_type"),
@@ -335,7 +390,7 @@ if __name__ == "__main__":
     final_facts_ixbrl = parse_filing(ixbrl_filing)
 
     assert isinstance(final_facts_ixbrl, list), "[Test 3] FAILED: Did not return a list."
-    assert 0 < len(final_facts_ixbrl) <= len(TARGET_METRICS) * 2, "[Test 3] FAILED: Unexpected number of final facts."
+    assert 0 < len(final_facts_ixbrl) <= len(METRIC_ALIASES) * 2, "[Test 3] FAILED: Unexpected number of final facts."
 
     first_final_fact = final_facts_ixbrl[0]
     print(f"Sample final fact (iXBRL): {first_final_fact}")
@@ -358,7 +413,7 @@ if __name__ == "__main__":
     final_facts_xbrl = parse_filing(xbrl_filing)
 
     assert isinstance(final_facts_xbrl, list), "[Test 4] FAILED: Did not return a list."
-    assert 0 < len(final_facts_xbrl) <= len(TARGET_METRICS) * 2, "[Test 4] FAILED: Unexpected number of final facts."
+    assert 0 < len(final_facts_xbrl) <= len(METRIC_ALIASES) * 2, "[Test 4] FAILED: Unexpected number of final facts."
 
     first_final_fact_xbrl = final_facts_xbrl[0]
     print(f"Sample final fact (XBRL): {first_final_fact_xbrl}")

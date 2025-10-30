@@ -1,6 +1,8 @@
 from dataclasses import dataclass
-import requests
+import time
 from typing import List
+
+import requests
 
 # You must declare a User-Agent.
 # Replace with your own info if you want.
@@ -39,40 +41,68 @@ def get_cik_map():
 def list_filings(cik: str) -> List[Filing]:
     """
     Lists all 10-K and 10-Q filings with XBRL for a given CIK.
+    Includes historical paginated submission files provided by the SEC.
     """
-    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    base_url = "https://data.sec.gov/submissions/"
+    url = f"{base_url}CIK{cik}.json"
     response = requests.get(url, headers=HEADERS)
     response.raise_for_status()
     data = response.json()
 
-    recent = data['filings']['recent']
-    acc_numbers = recent.get('accessionNumber', [])
-    filing_dates = recent.get('filingDate', [])
-    report_dates = recent.get('reportDate', [])
-    form_types = recent.get('form', [])
-    is_xbrls = recent.get('isXBRL', [])
-    is_inline_xbrls = recent.get('isInlineXBRL', [])
-    primary_documents = recent.get('primaryDocument', [])
+    data_blocks_to_parse = []
 
+    filings_data = data.get('filings', {})
+    recent = filings_data.get('recent')
+    if recent:
+        data_blocks_to_parse.append(recent)
+
+    historical_files = filings_data.get('files', [])
+    for file_info in historical_files:
+        file_name = file_info.get('name')
+        if not file_name:
+            continue
+
+        historical_url = f"{base_url}{file_name}"
+        try:
+            hist_resp = requests.get(historical_url, headers=HEADERS)
+            hist_resp.raise_for_status()
+            data_blocks_to_parse.append(hist_resp.json())
+            time.sleep(0.1)
+        except requests.RequestException as exc:
+            print(f"[list_filings] Warning: Failed to load historical data {file_name}: {exc}")
+            continue
+
+    seen_accessions = set()
     filings_list = []
-    # Note the two changes here:
-    for acc_num, f_date, r_date, form, is_xbrl, is_inline, doc in zip(
-        acc_numbers, filing_dates, report_dates, form_types, is_xbrls, is_inline_xbrls, primary_documents
-    ):
-        # ... (your filter logic)
-        if (form in {"10-K", "10-Q"}) and (is_xbrl or is_inline):
-            filings_list.append(
-                Filing(
-                    cik=cik,
-                    accessionNumber=acc_num,
-                    filingDate=f_date,
-                    reportDate=r_date,
-                    formType=form,
-                    isXBRL=bool(is_xbrl),       # Good idea to cast to bool
-                    isInlineXBRL=bool(is_inline), # Good idea to cast to bool
-                    primaryDocument=doc        # <-- ADD THIS
+    for data_block in data_blocks_to_parse:
+        acc_numbers = data_block.get('accessionNumber', [])
+        filing_dates = data_block.get('filingDate', [])
+        report_dates = data_block.get('reportDate', [])
+        form_types = data_block.get('form', [])
+        is_xbrls = data_block.get('isXBRL', [])
+        is_inline_xbrls = data_block.get('isInlineXBRL', [])
+        primary_documents = data_block.get('primaryDocument', [])
+
+        for acc_num, f_date, r_date, form, is_xbrl, is_inline, doc in zip(
+            acc_numbers, filing_dates, report_dates, form_types, is_xbrls, is_inline_xbrls, primary_documents
+        ):
+            if acc_num in seen_accessions:
+                continue
+
+            if (form in {"10-K", "10-Q"}) and (is_xbrl or is_inline):
+                filings_list.append(
+                    Filing(
+                        cik=cik,
+                        accessionNumber=acc_num,
+                        filingDate=f_date,
+                        reportDate=r_date,
+                        formType=form,
+                        isXBRL=bool(is_xbrl),
+                        isInlineXBRL=bool(is_inline),
+                        primaryDocument=doc,
+                    )
                 )
-            )
+                seen_accessions.add(acc_num)
     
     return filings_list
 
