@@ -65,9 +65,9 @@ def list_filings(cik: str) -> List[Filing]:
         historical_url = f"{base_url}{file_name}"
         try:
             hist_resp = requests.get(historical_url, headers=HEADERS)
+            time.sleep(0.1)
             hist_resp.raise_for_status()
             data_blocks_to_parse.append(hist_resp.json())
-            time.sleep(0.1)
         except requests.RequestException as exc:
             print(f"[list_filings] Warning: Failed to load historical data {file_name}: {exc}")
             continue
