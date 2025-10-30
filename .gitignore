@@ -1,0 +1,27 @@
+# Python build artifacts
+__pycache__/
+*.pyc
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+
+# Database files - VERY IMPORTANT
+*.db
+*.sqlite
+*.sqlite3
+
+# Local data folders
+DATA/
+data/
+
+# Scratch/example files
+example_code.py
+
+# OS files
+.DS_Store
