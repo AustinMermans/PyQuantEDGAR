@@ -1,0 +1,51 @@
+{
+    "Revenues": [
+        "Revenues",
+        "SalesRevenueNet",
+        "RevenueFromContractWithCustomerExcludingAssessedTax"
+    ],
+    "NetIncomeLoss": [
+        "NetIncomeLoss",
+        "ProfitLoss"
+    ],
+    "Assets": [
+        "Assets"
+    ],
+    "Liabilities": [
+        "Liabilities"
+    ],
+    "GrossProfit": [
+        "GrossProfit"
+    ],
+    "OperatingIncomeLoss": [
+        "OperatingIncomeLoss"
+    ],
+    "EarningsPerShareBasic": [
+        "EarningsPerShareBasic"
+    ],
+    "EarningsPerShareDiluted": [
+        "EarningsPerShareDiluted"
+    ],
+    "AssetsCurrent": [
+        "AssetsCurrent"
+    ],
+    "LiabilitiesCurrent": [
+        "LiabilitiesCurrent"
+    ],
+    "StockholdersEquity": [
+        "StockholdersEquity",
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+    ],
+    "CashAndCashEquivalentsAtCarryingValue": [
+        "CashAndCashEquivalentsAtCarryingValue"
+    ],
+    "NetCashProvidedByUsedInOperatingActivities": [
+        "NetCashProvidedByUsedInOperatingActivities"
+    ],
+    "NetCashProvidedByUsedInInvestingActivities": [
+        "NetCashProvidedByUsedInInvestingActivities"
+    ],
+    "NetCashProvidedByUsedInFinancingActivities": [
+        "NetCashProvidedByUsedInFinancingActivities"
+    ]
+}

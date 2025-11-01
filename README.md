@@ -2,145 +2,114 @@
 date created: 2025-10-29
 tags: 
 ---
+# PyQuantEDGAR - XBRL Ground Truth Pipeline
 
+The goal of this project is to build a robust, open-source Python data pipeline that creates an accurate, queryable database of historical financials for publicly traded US companies.
 
-# XBRL Ground Truth Pipeline
+This pipeline targets **XBRL-enabled SEC filings (approx. 2009-present)**. The resulting SQLite database serves as the "ground truth"—a clean, reliable dataset essential for quantitative analysis and for training a future "Stage 2" AI model.
 
----
-
-## 1. Project Title
-PyQuantEDGAR - Stage 1: XBRL Ground Truth Pipeline
-
----
-
-## 2. Project Motivation
-The goal of this project is to build a robust, open-source Python data pipeline that creates a 100% accurate, queryable database of historical financials for publicly traded US companies.
-
-This pipeline will **exclusively target modern (post-~2009), XBRL-tagged SEC filings**. The resulting SQLite database will serve as the "ground truth"—a clean, reliable dataset essential for quantitative analysis and for training a potential "Stage 2" AI-based historical data-filling model.
+This project was built bottom-up, module-by-module, with a focus on testing and robustness.
 
 ---
 
-## 3. Core Features & Scope (Version 1.0)
+## 1. Core Features & Scope (Version 1.0)
 
 ##### ✅ **In-Scope:**
-* **CIK-Ticker Mapping:** A module to resolve company tickers (e.g., `AAPL`) or names (e.g., `Apple Inc.`) to their CIK numbers.
-* **Filing Indexing:** Download a company's filing history (`10-K`, `10-Q`) from the `data.sec.gov` JSON endpoints.
-* **XBRL Identification:** The tool **must** identify which filings contain structured XBRL data by reading the `isXBRL` and `isInlineXBRL` flags from the SEC's JSON data.
-* **XBRL-Only Parsing:** The parser will *only* process filings flagged as XBRL. It will download the associated `.xml` files and parse them.
-* **Metric Extraction:** The parser will be configured to extract a specific list of financial metrics (see section 4).
-* **Database Storage:** All extracted, structured data will be saved into a local **SQLite** database.
-* **CLI Interface:** The project will be run on-demand via a command-line interface (e.g., `python main.py --tickers AAPL,MSFT`).
+* **CIK-Ticker Mapping:** Resolves company tickers (e.g., `AAPL`) to their 10-digit CIK numbers.
+* **Full Filing History:** Intelligently parses the `submissions.json` API, including all historical "paginated" files, to fetch the *complete* filing history for a company (not just the "recent" view).
+* **Smart URL Discovery:** Automatically finds the correct parsable file (`.xml` or `.htm`) for both old-style XBRL and new-style iXBRL filings.
+* **Metric Aliasing:** Parses filings using a "cheat sheet" of known tag variations (`METRIC_ALIASES`) to correctly find metrics across different years and taxonomy versions.
+* **Value Processing:** Correctly scales financial values based on the `decimals` attribute (e.g., handles millions, thousands) and cleans numeric text.
+* **Database Storage:** Saves all extracted facts into a local `edgar_data.db` SQLite database.
+* **CLI Interface:** Runs on-demand via a command-line interface (e.g., `python main.py --tickers AAPL --start-year 2009`).
 
 ##### ❌ **Out-of-Scope (Critical Boundaries):**
-* **No Text/HTML Parsing:** This project will **not** attempt to parse `.txt` or `.htm` files. All regex and/or LLM parsing is deferred to Stage 2.
-* **No Legacy Data:** Filings without an XBRL flag (primarily pre-~2009) will be **skipped**.
-* **No Other Forms:** We will focus exclusively on `10-K` and `10-Q` forms. `8-K`, `13F`, etc., are not in scope.
-* **No Web API:** This will not be a web service.
+* **No Text/HTML Parsing:** This tool does *not* parse unstructured text from pre-XBRL filings (pre-~2009). This is deferred to Stage 2.
+* **No "Librarian" (Stage 1.5):** This version does not yet dynamically parse taxonomy files (`_pre.xml`, `_lab.xml`). It relies on the manually-curated `METRIC_ALIASES` map.
+* **No Other Forms:** Exclusively focuses on `10-K` and `10-Q` forms.
 
 ---
 
-## 4. Target Metrics (Version 1.0)
-The parser's initial goal is to find and extract the following four key metrics. The parser must be able to find the standard US-GAAP (us-gaap) taxonomy tags.
+## 2. Target Metrics (Version 1.0)
+The parser uses an aliasing map to find the most common tag variations for each standard metric. This allows it to find facts across different US-GAAP taxonomy versions.
 
-| Metric | Common US-GAAP XBRL Tags |
+| Standard Metric | Common US-GAAP XBRL Tags (Aliases) |
 | :--- | :--- |
-| **Total Revenues** | `Revenues`, `SalesRevenueNet`, `RevenuesNet` |
-| **Net Income** | `NetIncomeLoss` |
-| **Total Assets** | `Assets` |
-| **Total Liabilities** | `Liabilities` |
+| **Revenues** | `Revenues`, `SalesRevenueNet`, `RevenueFromContractWithCustomerExcludingAssessedTax` |
+| **NetIncomeLoss** | `NetIncomeLoss`, `ProfitLoss` |
+| **Assets** | `Assets` |
+| **Liabilities** | `Liabilities` |
+| **GrossProfit** | `GrossProfit` |
+| **OperatingIncomeLoss**| `OperatingIncomeLoss` |
+| **EarningsPerShareDiluted** | `EarningsPerShareDiluted` |
+| **AssetsCurrent** | `AssetsCurrent` |
+| **LiabilitiesCurrent** | `LiabilitiesCurrent` |
+| **StockholdersEquity** | `StockholdersEquity`, `StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest` |
+| **CashAndCashEquivalents...** | `CashAndCashEquivalentsAtCarryingValue` |
+| **NetCash...Operating** | `NetCashProvidedByUsedInOperatingActivities` |
+| **NetCash...Investing** | `NetCashProvidedByUsedInInvestingActivities` |
+| **NetCash...Financing**| `NetCashProvidedByUsedInFinancingActivities` |
 
 ---
 
-## 5. Technical Stack
+## 3. Technical Stack
 * **Language:** `Python 3.10+`
-* **Downloading:** `requests` (for all HTTP calls to SEC.gov)
-* **Parsing:** `lxml` (The standard, high-performance library for parsing `.xml` XBRL files)
-* **Database:** `sqlite3` (Built-in Python module)
-* **Data Staging:** `pandas` (Useful for holding data before inserting it into the DB)
-* **CLI:** `argparse` (Built-in Python module for creating the user interface)
-* **Concurrency:** `concurrent.futures` (For parallel downloading of filings)
+* **Downloading:** `requests`
+* **Parsing:** `lxml`
+* **Database:** `sqlite3`
+* **CLI:** `argparse`
 
 ---
 
-## 6. Database Schema
-The pipeline will populate two main tables in a single `edgar_data.db` file.
+## 4. Database Schema
+The pipeline populates two tables in `edgar_data.db`:
 
 **Table 1: `companies`**
-This table maps a CIK to its common identifiers.
 * `cik` (TEXT, Primary Key): The 10-digit Central Index Key.
-* `ticker` (TEXT): The company's most recent ticker symbol.
-* `name` (TEXT): The company's official name.
+* `ticker` (TEXT): The company's ticker symbol.
+* `name` (TEXT): The company name.
 
 **Table 2: `financial_facts`**
-This is the main data table. It stores every individual fact in a "tidy" format.
-* `id` (INTEGER, Primary Key): A unique ID for the row.
+* `id` (INTEGER, Primary Key): A unique ID for the fact.
 * `company_cik` (TEXT): Foreign Key to `companies.cik`.
-* `metric` (TEXT): The name of the financial metric (e.g., `NetIncomeLoss`).
-* `value` (REAL): The extracted numeric value (e.g., `12345000000`).
-* `period_end_date` (TEXT): The end date of the reporting period (e.g., "2025-09-30").
+* `metric` (TEXT): The **standardized** metric name (e.g., "Revenues").
+* `value` (REAL): The final, scaled numeric value.
+* `period_end_date` (TEXT): The end date of the reporting period ("YYYY-MM-DD").
 * `fiscal_year` (INTEGER): The reported fiscal year.
 * `fiscal_quarter` (INTEGER): The reported fiscal quarter (1-4).
-* `form_type` (TEXT): The form this fact came from ("10-K" or "10-Q").
-* `filing_date` (TEXT): The date the report was filed with the SEC.
+* `form_type` (TEXT): "10-K" or "10-Q".
+* `filing_date` (TEXT): The date the form was filed ("YYYY-MM-DD").
 
 ---
 
-## 7. Architecture & Key Modules
-This project can be broken into 3-4 key Python files:
-
-**1. `database.py`**
-* **Purpose:** Handles all SQLite database interactions.
-* **Key Functions:**
-    * `create_connection()`: Connects to the `edgar_data.db` file.
-    * `create_tables()`: Runs the `CREATE TABLE` SQL to build the schema.
-    * `insert_company(cik, ticker, name)`: Adds/updates a company in the `companies` table.
-    * `insert_financials(facts_list)`: Bulk-inserts a list of parsed facts into the `financial_facts` table.
-
-**2. `edgar_downloader.py`**
-* **Purpose:** Handles all communication with SEC.gov. This module *gets* the work, it doesn't *do* the work.
-* **Classes/Functions:**
-    * `CIKMapper`: Uses the `company_tickers.json` file to build a lookup. Your `lookup_cik` function is perfect for this.
-    * `FilingDownloader`:
-        * `list_filings(cik, start_date)`: Fetches the `submissions/CIK{...}.json` file.
-        * It will parse this JSON and return a list of `Filing` objects.
-        * Crucially, the `Filing` object **must** store the `isXBRL` and `isInlineXBRL` booleans, along with the `accessionNumber`, `filingDate`, etc.
-
-**3. `xbrl_parser.py`**
-* **Purpose:** The core logic. Takes a `Filing` object and extracts the data.
-* **Classes/Functions:**
-    * `XBRLParser`:
-        * `parse_filing(filing)`:
-            1.  Checks `if not filing.isXBRL and not filing.isInlineXBRL: return []`.
-            2.  Constructs the URL for the primary `.xml` data file from the `accessionNumber`.
-            3.  Downloads the `.xml` file content.
-            4.  Uses `lxml` and `xpath` to find all tags matching our target metrics (e.g., `//us-gaap:NetIncomeLoss`).
-            5.  For each tag found, it also finds its `contextRef` (to get the date) and `unitRef` (to check for USD).
-            6.  Returns a list of dictionaries, where each one is a clean row for our `financial_facts` table.
-
-**4. `main.py`**
-* **Purpose:** The entry point that ties everything together.
-* **Logic:**
-    1.  Uses `argparse` to get user input (e.g., `--tickers "AAPL,MSFT"`).
-    2.  Initializes the `DatabaseManager` and `CIKMapper`.
-    3.  For each ticker:
-        * Gets the CIK.
-        * Calls `FilingDownloader.list_filings()` to get a list of all `Filing` objects.
-        * Iterates through the list of filings.
-        * Passes each `Filing` to `XBRLParser.parse_filing()`.
-        * Takes the returned list of facts and passes them to `DatabaseManager.insert_financials()`.
+## 5. Architecture ("The Newsroom")
+* **`main.py` (The Editor-in-Chief):** The "controller." Takes commands from the user (via CLI), and directs the other modules to run the full pipeline, handling errors gracefully.
+* **`database.py` (The News Archive):** Handles all SQLite database interactions: creating the tables and inserting the final, clean facts.
+* **`edgar_downloader.py` (The Book Runner / Field Reporter):** Handles all communication with SEC.gov. Finds CIKs and fetches the *complete, paginated* filing history (all JSON files) for a company.
+* **`xbrl_parser.py` (The Reader):** The "brains."
+    1.  Receives a single `Filing` object.
+    2.  Finds the correct `.xml` or `.htm` file to parse.
+    3.  Parses the document using `lxml`.
+    4.  Uses the `METRIC_ALIASES` map to find all relevant facts.
+    5.  Parses the `<context>` elements to find the correct dates.
+    6.  Selects the *most relevant* fact for each metric.
+    7.  Cleans and scales the numeric value (using the `decimals` attribute).
+    8.  Returns a final list of facts, ready for the database.
 
 ---
 
-## 8. Example Workflow (User Story)
-1.  **User runs:** `python main.py --tickers "MSFT" --start-year 2010`
+## 6. Example Workflow (User Story)
+1.  **User runs:** `python main.py --tickers "AAPL" --start-year 2009`
 2.  `main.py` starts.
-3.  `CIKMapper` looks up "MSFT" -> "0000789019".
-4.  `FilingDownloader` fetches all 10-K/10-Q filings for "0000789019" since 2010.
-5.  `main.py` loops through the list...
-    * It picks a 2012 10-K. It sees `isXBRL: True`. It sends this to the parser.
-    * `XBRLParser` downloads the `.xml`, finds `<us-gaap:NetIncomeLoss ...>16008000000</us-gaap:NetIncomeLoss>`, and returns a clean data row.
-    * `DatabaseManager` inserts this row.
-    * It picks a 2005 10-K. It sees `isXBRL: False`. It **skips this filing**.
-6.  The script finishes. The user now has all of Microsoft's XBRL-era financial facts for our four metrics in `edgar_data.db`.
-
-
+3.  `database.py` initializes the `edgar_data.db` tables.
+4.  `edgar_downloader.py` fetches the CIK for "aapl" (`0000320193`).
+5.  `edgar_downloader.py` fetches `CIK0000320193.json`, finds the `filings.files` array, and downloads all historical JSON files (e.g., `...-001.json`). It builds a *complete* list of all 65 XBRL-enabled filings from 2009-present.
+6.  `main.py` loops through this complete list.
+    * It picks the 2017 10-K. It passes the `Filing` object to the parser.
+    * `xbrl_parser.py` sees `isInlineXBRL: False` and `primaryDocument: 'aapl-20170930.htm'`.
+    * It correctly builds the URL to `.../aapl-20170930.xml`.
+    * It parses the `.xml` file and uses the "aliasing" logic (Method B) to find the tags (e.g., `us-gaap:SalesRevenueNet`).
+    * It finds 12 facts, adjusts their values, and returns them as a list of clean dictionaries.
+    * `database.py` inserts these 12 facts into the `financial_facts` table.
+7.  The loop continues, populating the database with the full XBRL history.
+8.  The script finishes: "Pipeline execution complete."

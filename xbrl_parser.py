@@ -1,41 +1,49 @@
 import datetime
+import json
 from dataclasses import dataclass
 import requests
 from lxml import etree # This is the standard import for lxml's parsing tools
 from edgar_downloader import Filing
 
-# Maps our internal, standard metric name to a list of possible
-# US-GAAP XBRL tag variations from different taxonomy years.
-METRIC_ALIASES = {
-    "Revenues": [
-        "Revenues",
-        "SalesRevenueNet",
-        "RevenueFromContractWithCustomerExcludingAssessedTax",
-    ],
-    "NetIncomeLoss": [
-        "NetIncomeLoss",
-        "ProfitLoss",
-    ],
-    "Assets": ["Assets"],
-    "Liabilities": ["Liabilities"],
-    "GrossProfit": ["GrossProfit"],
-    "OperatingIncomeLoss": ["OperatingIncomeLoss"],
-    "EarningsPerShareBasic": ["EarningsPerShareBasic"],
-    "EarningsPerShareDiluted": ["EarningsPerShareDiluted"],
-    "AssetsCurrent": ["AssetsCurrent"],
-    "LiabilitiesCurrent": ["LiabilitiesCurrent"],
-    "StockholdersEquity": [
-        "StockholdersEquity",
-        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-    ],
-    "CashAndCashEquivalentsAtCarryingValue": ["CashAndCashEquivalentsAtCarryingValue"],
-    "NetCashProvidedByUsedInOperatingActivities": ["NetCashProvidedByUsedInOperatingActivities"],
-    "NetCashProvidedByUsedInInvestingActivities": ["NetCashProvidedByUsedInInvestingActivities"],
-    "NetCashProvidedByUsedInFinancingActivities": ["NetCashProvidedByUsedInFinancingActivities"],
-}
-
 # Re-define our HEADERS constant for this file's requests
 HEADERS = {"User-Agent": "PyQuantEDGAR Contact@example.com"}
+
+ALIAS_FILE_PATH = "metric_aliases.json"
+_ALIAS_CACHE = None
+
+def _load_aliases():
+    """
+    Loads the metric aliases from disk, caching the result for reuse.
+    """
+    global _ALIAS_CACHE
+    if _ALIAS_CACHE is not None:
+        return _ALIAS_CACHE
+
+    with open(ALIAS_FILE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    _ALIAS_CACHE = data
+    return _ALIAS_CACHE
+
+def save_new_aliases(new_aliases_map: dict):
+    """
+    Merge newly discovered aliases into the metric alias cache and persist them to disk.
+    """
+    global _ALIAS_CACHE
+    aliases = _load_aliases()
+
+    for standard_name, new_tag in new_aliases_map.items():
+        if not standard_name or not new_tag:
+            continue
+
+        existing = aliases.setdefault(standard_name, [])
+        if new_tag not in existing:
+            existing.append(new_tag)
+
+    with open(ALIAS_FILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(aliases, f, indent=4)
+
+    _ALIAS_CACHE = None
 
 def _url_exists(url: str) -> bool:
     """
@@ -156,7 +164,7 @@ def _coerce_numeric(value_text: str):
 def parse_filing(filing: Filing):
     """
     Downloads the filing document and parses it into an lxml tree.
-    Returns a list of fact dictionaries extracted from METRIC_ALIASES.
+    Returns a list of fact dictionaries extracted from the metric aliases mapping.
     """
     url = get_parsable_document_url(filing)
     response = requests.get(url, headers=HEADERS)
@@ -189,7 +197,9 @@ def parse_filing(filing: Filing):
     contexts = _parse_contexts(tree)
     extracted_facts = []
 
-    for standard_metric, tag_aliases in METRIC_ALIASES.items():
+    aliases = _load_aliases()
+
+    for standard_metric, tag_aliases in aliases.items():
         metric_xpath = build_metric_xpath(tag_aliases)
         elements = tree.xpath(metric_xpath)
         if not elements:
@@ -358,7 +368,35 @@ def _parse_contexts(tree):
 if __name__ == "__main__":
     print("--- Testing xbrl_parser.py ---")
 
-    # --- Test Data --- (Keep both filings)
+    # --- Test 1: Load Aliases ---
+    print("\n[Test 1] Loading aliases from metric_aliases.json...")
+    aliases = _load_aliases()
+    assert aliases is not None, "[Test 1] FAILED: Alias cache is None."
+    assert "Revenues" in aliases, "[Test 1] FAILED: 'Revenues' not in alias map."
+    print(f"Successfully loaded {len(aliases)} metric alias groups.")
+    print("[Test 1] Passed.")
+
+    # --- Test 2: Save New Aliases ---
+    print("\n[Test 2] Testing alias saving and cache invalidation...")
+
+    new_alias_to_add = {"Revenues": "us-gaap:TotallyNewRevenueTag"}
+    save_new_aliases(new_alias_to_add)
+    reloaded_aliases = _load_aliases()
+
+    assert "us-gaap:TotallyNewRevenueTag" in reloaded_aliases["Revenues"], \
+        "[Test 2] FAILED: New alias was not saved or cache was not invalidated."
+
+    print("Successfully saved and reloaded new alias.")
+
+    del reloaded_aliases["Revenues"][-1]
+    with open(ALIAS_FILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(reloaded_aliases, f, indent=4)
+    _ALIAS_CACHE = None
+
+    print("Cleaned up test alias.")
+    print("[Test 2] Passed.")
+
+    # --- Test Data --- (Keep as-is)
     ixbrl_filing = Filing(
         cik='0000320193',
         accessionNumber='0000320193-25-000073',
@@ -381,55 +419,54 @@ if __name__ == "__main__":
         primaryDocument='aapl-20141227.htm'
     )
 
-    # --- Test 1 & 2: URL Building ---
-    print("\n[Test 1] Passed.")
-    print("\n[Test 2] Passed.")
+    # --- Test 3 & 4: URL Building ---
+    print("\n[Test 3] Passed.")
+    print("\n[Test 4] Passed.")
 
-    # --- Test 3: Process iXBRL Filing to Final Format ---
-    print("\n[Test 3] Processing iXBRL filing into final facts...")
+    # --- Test 5 & 6: Fact Extraction ---
+    print("\n[Test 5] Processing iXBRL filing into final facts...")
     final_facts_ixbrl = parse_filing(ixbrl_filing)
 
-    assert isinstance(final_facts_ixbrl, list), "[Test 3] FAILED: Did not return a list."
-    assert 0 < len(final_facts_ixbrl) <= len(METRIC_ALIASES) * 2, "[Test 3] FAILED: Unexpected number of final facts."
+    assert isinstance(final_facts_ixbrl, list), "[Test 5] FAILED: Did not return a list."
+    assert 0 < len(final_facts_ixbrl) <= len(aliases) * 2, "[Test 5] FAILED: Unexpected number of final facts."
 
     first_final_fact = final_facts_ixbrl[0]
     print(f"Sample final fact (iXBRL): {first_final_fact}")
-    assert 'company_cik' in first_final_fact, "[Test 3] FAILED: 'company_cik' missing."
-    assert 'metric' in first_final_fact, "[Test 3] FAILED: 'metric' missing."
-    assert 'value' in first_final_fact, "[Test 3] FAILED: 'value' missing."
-    assert isinstance(first_final_fact['value'], float), "[Test 3] FAILED: 'value' is not a float."
-    assert 'period_end_date' in first_final_fact, "[Test 3] FAILED: 'period_end_date' missing."
-    assert len(first_final_fact['period_end_date']) == 10 and first_final_fact['period_end_date'][4] == '-', "[Test 3] FAILED: 'period_end_date' format looks wrong."
-    assert 'fiscal_year' in first_final_fact, "[Test 3] FAILED: 'fiscal_year' missing."
-    assert 'fiscal_quarter' in first_final_fact, "[Test 3] FAILED: 'fiscal_quarter' missing."
-    assert 'form_type' in first_final_fact, "[Test 3] FAILED: 'form_type' missing."
-    assert 'filing_date' in first_final_fact, "[Test 3] FAILED: 'filing_date' missing."
+    assert 'company_cik' in first_final_fact, "[Test 5] FAILED: 'company_cik' missing."
+    assert 'metric' in first_final_fact, "[Test 5] FAILED: 'metric' missing."
+    assert 'value' in first_final_fact, "[Test 5] FAILED: 'value' missing."
+    assert isinstance(first_final_fact['value'], float), "[Test 5] FAILED: 'value' is not a float."
+    assert 'period_end_date' in first_final_fact, "[Test 5] FAILED: 'period_end_date' missing."
+    assert len(first_final_fact['period_end_date']) == 10 and first_final_fact['period_end_date'][4] == '-', "[Test 5] FAILED: 'period_end_date' format looks wrong."
+    assert 'fiscal_year' in first_final_fact, "[Test 5] FAILED: 'fiscal_year' missing."
+    assert 'fiscal_quarter' in first_final_fact, "[Test 5] FAILED: 'fiscal_quarter' missing."
+    assert 'form_type' in first_final_fact, "[Test 5] FAILED: 'form_type' missing."
+    assert 'filing_date' in first_final_fact, "[Test 5] FAILED: 'filing_date' missing."
     
     print(f"Processed into {len(final_facts_ixbrl)} final facts from iXBRL.")
-    print("[Test 3] Passed.")
+    print("[Test 5] Passed.")
 
-    # --- Test 4: Process Old XBRL Filing to Final Format ---
-    print("\n[Test 4] Processing old XBRL filing into final facts...")
+    print("\n[Test 6] Processing old XBRL filing into final facts...")
     final_facts_xbrl = parse_filing(xbrl_filing)
 
-    assert isinstance(final_facts_xbrl, list), "[Test 4] FAILED: Did not return a list."
-    assert 0 < len(final_facts_xbrl) <= len(METRIC_ALIASES) * 2, "[Test 4] FAILED: Unexpected number of final facts."
+    assert isinstance(final_facts_xbrl, list), "[Test 6] FAILED: Did not return a list."
+    assert 0 < len(final_facts_xbrl) <= len(aliases) * 2, "[Test 6] FAILED: Unexpected number of final facts."
 
     first_final_fact_xbrl = final_facts_xbrl[0]
     print(f"Sample final fact (XBRL): {first_final_fact_xbrl}")
-    assert 'company_cik' in first_final_fact_xbrl, "[Test 4] FAILED: 'company_cik' missing."
-    assert 'metric' in first_final_fact_xbrl, "[Test 4] FAILED: 'metric' missing."
-    assert 'value' in first_final_fact_xbrl, "[Test 4] FAILED: 'value' missing."
-    assert isinstance(first_final_fact_xbrl['value'], float), "[Test 4] FAILED: 'value' is not a float."
-    assert 'period_end_date' in first_final_fact_xbrl, "[Test 4] FAILED: 'period_end_date' missing."
-    assert len(first_final_fact_xbrl['period_end_date']) == 10 and first_final_fact_xbrl['period_end_date'][4] == '-', "[Test 4] FAILED: 'period_end_date' format looks wrong."
-    assert 'fiscal_year' in first_final_fact_xbrl, "[Test 4] FAILED: 'fiscal_year' missing."
-    assert 'fiscal_quarter' in first_final_fact_xbrl, "[Test 4] FAILED: 'fiscal_quarter' missing."
-    assert 'form_type' in first_final_fact_xbrl, "[Test 4] FAILED: 'form_type' missing."
-    assert 'filing_date' in first_final_fact_xbrl, "[Test 4] FAILED: 'filing_date' missing."
+    assert 'company_cik' in first_final_fact_xbrl, "[Test 6] FAILED: 'company_cik' missing."
+    assert 'metric' in first_final_fact_xbrl, "[Test 6] FAILED: 'metric' missing."
+    assert 'value' in first_final_fact_xbrl, "[Test 6] FAILED: 'value' missing."
+    assert isinstance(first_final_fact_xbrl['value'], float), "[Test 6] FAILED: 'value' is not a float."
+    assert 'period_end_date' in first_final_fact_xbrl, "[Test 6] FAILED: 'period_end_date' missing."
+    assert len(first_final_fact_xbrl['period_end_date']) == 10 and first_final_fact_xbrl['period_end_date'][4] == '-', "[Test 6] FAILED: 'period_end_date' format looks wrong."
+    assert 'fiscal_year' in first_final_fact_xbrl, "[Test 6] FAILED: 'fiscal_year' missing."
+    assert 'fiscal_quarter' in first_final_fact_xbrl, "[Test 6] FAILED: 'fiscal_quarter' missing."
+    assert 'form_type' in first_final_fact_xbrl, "[Test 6] FAILED: 'form_type' missing."
+    assert 'filing_date' in first_final_fact_xbrl, "[Test 6] FAILED: 'filing_date' missing."
     
     print(f"Processed into {len(final_facts_xbrl)} final facts from XBRL.")
-    print("[Test 4] Passed.")
+    print("[Test 6] Passed.")
 
     print("\n--- All tests complete. ---")
 def _to_date(value: str):

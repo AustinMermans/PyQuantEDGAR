@@ -1,4 +1,6 @@
 import sqlite3
+import pandas as pd
+import requests
 
 DB_FILE = "edgar_data.db"
 
@@ -75,6 +77,48 @@ def insert_financial_facts(facts):
     conn.close()
 
     return len(rows)
+
+def query_facts_by_ticker(ticker: str) -> pd.DataFrame:
+    """
+    Queries the database for all facts for a given ticker
+    and returns them as a pandas DataFrame.
+    """
+    print(f"\nQuerying database for ticker: {ticker.upper()}...")
+
+    # We need the CIK for the ticker
+    # (This is a bit redundant, but simple for a test)
+    try:
+        response = requests.get(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers={"User-Agent": "PyQuantEDGAR Contact@example.com"}
+        )
+        response.raise_for_status()
+        data = response.json()
+        cik_map = {row['ticker'].lower(): f"{row['cik_str']:010d}" for row in data.values()}
+        cik = cik_map.get(ticker.lower())
+
+        if not cik:
+            print(f"Ticker {ticker} not found in CIK map.")
+            return pd.DataFrame() # Return empty DataFrame
+    except Exception as e:
+        print(f"Error fetching CIK map: {e}")
+        return pd.DataFrame()
+
+    # Now, query the database
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        # Use pandas to read the SQL query directly into a DataFrame
+        df = pd.read_sql_query(
+            f"SELECT * FROM financial_facts WHERE company_cik = '{cik}' ORDER BY period_end_date DESC", 
+            conn
+        )
+        return df
+    except Exception as e:
+        print(f"Error querying database: {e}")
+        return pd.DataFrame()
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
 
 if __name__ == "__main__":
     initialize_database()
